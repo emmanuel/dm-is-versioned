@@ -37,7 +37,7 @@ describe 'DataMapper::Is::Versioned' do
           Story::Version.properties.any? do |version_property|
             version_property.name      == property.name &&
             version_property.primitive == property.primitive
-          end
+          end.should be(true)
         end
       end
     end
