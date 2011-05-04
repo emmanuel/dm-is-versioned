@@ -71,6 +71,10 @@ module DataMapper
       end
 
       module ClassMethods
+        # Don't create the version model until the constant is accessed. This
+        # allows property definitions to occur after the is_versioned call.
+        # 
+        # @api private
         def const_missing(name)
           if name == :Version
             model = DataMapper::Model.new(name, self)
