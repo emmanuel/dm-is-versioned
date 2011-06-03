@@ -19,6 +19,8 @@ class Story
   is_versioned :on => :updated_at
 end
 
+Story::Version
+
 describe 'DataMapper::Is::Versioned' do
 
   supported_by :sqlite, :mysql, :postgres do
@@ -90,12 +92,12 @@ describe 'DataMapper::Is::Versioned' do
             @story.save.should be(true)
           end
 
-          it 'should create a versioned copy' do
+          it 'should create a versioned copy', :focus => true do
             Story::Version.all.size.should == 1
           end
 
           it 'should not have the same value for the versioned field' do
-            @story.updated_at.should_not == Story::Version.first.updated_at
+            @story.created_at.should_not == Story::Version.first.created_at
           end
 
           it 'should save the original value, not the inner update' do

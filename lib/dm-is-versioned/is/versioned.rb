@@ -23,7 +23,7 @@ module DataMapper
     #     property :title, String
     #     property :updated_at, DateTime
     #
-    #     is_versioned :on => [:updated_at]
+    #     is_versioned :on => :updated_at
     #   end
     #
     # == Auto Upgrading and Auto Migrating
@@ -46,28 +46,51 @@ module DataMapper
     # TODO: enable replacing a current version with an old version.
     module Versioned
       def is_versioned(options = {})
-        @on = on = options[:on]
+        assert_kind_of "options[:on]", options[:on], Symbol
 
-        extend(Migration) if respond_to?(:auto_migrate!)
-
-        properties.each do |property|
-          name = property.name
-          before "#{name}=".to_sym do
-            unless (value = property.get(self)).nil? || pending_version_attributes.key?(name)
-              pending_version_attributes[name] = value
-            end
-          end
+        @versioned_on = on = options[:on]
+        class << self
+          attr_reader :versioned_on
         end
 
-        after :update do
-          if clean? && pending_version_attributes.key?(on)
-            model::Version.create(attributes.merge(pending_version_attributes))
-            pending_version_attributes.clear
-          end
+        # TODO: clean this up. there ought to be some way to get the original
+        # attributes after the data-store has confirmed the save
+        before :save do
+          @_previous_attributes = original_attributes.dup
         end
 
+        after :create, :record_create
+
+        extend Migration if respond_to?(:auto_migrate!)
         extend ClassMethods
         include InstanceMethods
+      end
+
+      def self.create_version_model(versioned_model, name = :Version)
+        version_property_name = versioned_model.versioned_on
+        model = DataMapper::Model.new(name, versioned_model)
+
+        versioned_model.properties.each do |property|
+          versioned_on_property = property.name == version_property_name
+          # next unless property.key? || versioned_on_property
+
+          type =
+            case property
+            when DataMapper::Property::Discriminator then Class
+            when DataMapper::Property::Serial        then Integer
+            else property.class
+            end
+
+          options = property.options.merge(:key => versioned_on_property)
+          options[:key] = true if options.delete(:serial)
+
+          model.property(property.name, type, options)
+        end
+
+        model.property(:resource_attributes, DataMapper::Property::Text)
+        model.timestamps :created_at if defined?(DataMapper::Timestamps)
+
+        model
       end
 
       module ClassMethods
@@ -77,24 +100,7 @@ module DataMapper
         # @api private
         def const_missing(name)
           if name == :Version
-            model = DataMapper::Model.new(name, self)
-
-            properties.each do |property|
-              type = case property
-                when DataMapper::Property::Discriminator then Class
-                when DataMapper::Property::Serial        then Integer
-              else
-                property.class
-              end
-
-              options = property.options.merge(:key => property.name == @on)
-
-              options[:key] = true if options.delete(:serial)
-
-              model.property(property.name, type, options)
-            end
-
-            model
+            DataMapper::Is::Versioned.create_version_model(self, name)
           else
             super
           end
@@ -102,17 +108,6 @@ module DataMapper
       end # ClassMethods
 
       module InstanceMethods
-        ##
-        # Returns a hash of original values to be stored in the
-        # versions table when a new version is created. It is
-        # cleared after a version model is created.
-        #
-        # --
-        # @return <Hash>
-        def pending_version_attributes
-          @pending_version_attributes ||= {}
-        end
-
         ##
         # Returns a collection of other versions of this resource.
         # The versions are related on the models keys, and ordered
@@ -125,6 +120,31 @@ module DataMapper
           query = Hash[ model.key.zip(key).map { |p, v| [ p.name, v ] } ]
           query.merge(:order => version_model.key.map { |k| k.name.desc })
           version_model.all(query)
+        end
+
+      private
+
+        def record_event(event)
+          if clean? && @_previous_attributes.key?(model.versioned_on)
+            snapshot = attributes.merge(@_previous_attributes)
+            raise "snapshot: #{snapshot.inspect}"
+            version_attributes = self.version_attributes.merge({
+              :event => event,
+              :resource_attributes => snapshot
+            }).merge(Hash[model.key.map { |p| p.name }.zip(key)])
+            version = model::Version.create(version_attributes)
+            p [version_attributes, version].inspect
+            @_previous_attributes = {}
+          end
+        end
+
+        def record_create
+          record_event(:create)
+        end
+
+        # attributes that will be set on new versions of this Resource when created
+        def new_version_attributes
+          {}
         end
       end # InstanceMethods
 
